@@ -1,5 +1,27 @@
 import numpy as np
 
+class KalmanFilter:
+    def __init__(self, initial_state, initial_covariance, transition_matrix, observation_matrix, process_noise, measurement_noise):
+        self.state_estimate = initial_state
+        self.covariance_estimate = initial_covariance
+        self.transition_matrix = transition_matrix
+        self.observation_matrix = observation_matrix
+        self.process_noise = process_noise
+        self.measurement_noise = measurement_noise
+
+    def predict(self):
+        # Predict the next state
+        self.state_estimate = self.transition_matrix @ self.state_estimate
+        self.covariance_estimate = self.transition_matrix @ self.covariance_estimate @ self.transition_matrix.T + self.process_noise
+
+    def update(self, measurement):
+        # Update the state estimate with a new measurement
+        kalman_gain = self.covariance_estimate @ self.observation_matrix.T @ np.linalg.inv(
+            self.observation_matrix @ self.covariance_estimate @ self.observation_matrix.T + self.measurement_noise)
+        self.state_estimate = self.state_estimate + kalman_gain @ (measurement - self.observation_matrix @ self.state_estimate)
+        self.covariance_estimate = (np.eye(len(self.covariance_estimate)) - kalman_gain @ self.observation_matrix) @ self.covariance_estimate
+
+
 class Cezeri(CezeriParent):
 
     start_point = []
@@ -18,7 +40,42 @@ class Cezeri(CezeriParent):
 
 
     def __init__(self, id = 0):
-        super().__init__(id = id, keyboard = False, sensor_mode = DUZELTILMIS)
+        super().__init__(id = id, keyboard = False, sensor_mode = NORMAL)
+        self.kalman_filter_gnss = KalmanFilter(
+            initial_state=np.array([self.gnss.enlem, self.gnss.boylam, self.gnss.irtifa, 0, 0, 0]),  # [latitude, longitude, altitude, velocity_lat, velocity_lon, velocity_alt]
+            initial_covariance=np.eye(6),
+            transition_matrix=np.array([[1, 0, 0, 1, 0, 0],
+                                        [0, 1, 0, 0, 1, 0],
+                                        [0, 0, 1, 0, 0, 1],
+                                        [0, 0, 0, 1, 0, 0],
+                                        [0, 0, 0, 0, 1, 0],
+                                        [0, 0, 0, 0, 0, 1]]),
+            observation_matrix=np.array([[1, 0, 0, 0, 0, 0],
+                                         [0, 1, 0, 0, 0, 0],
+                                         [0, 0, 1, 0, 0, 0]]),
+            process_noise=np.eye(6) * 0.1,
+            measurement_noise=np.eye(3) * 0.5
+        )
+
+        self.kalman_filter_magnetometer = KalmanFilter(
+            initial_state=np.array([self.manyetometre.veri, 0]),  # [magnetometer reading, change_rate]
+            initial_covariance=np.eye(2),
+            transition_matrix=np.array([[1, 1],
+                                        [0, 1]]),
+            observation_matrix=np.array([[1, 0]]),
+            process_noise=np.eye(2) * 0.1,
+            measurement_noise=np.eye(1) * 0.5
+        )
+
+    def get_noisy_measurement_gnss(self):
+        # Simulate getting a noisy GNSS measurement
+        noise = np.random.normal(0, 0.5, 3)  # Assuming a noise standard deviation of 0.5
+        return np.array([self.gnss.enlem, self.gnss.boylam, self.gnss.irtifa]) + noise
+
+    def get_noisy_measurement_magnetometer(self):
+        # Simulate getting a noisy magnetometer measurement
+        noise = np.random.normal(0, 0.5, 1)  # Assuming a noise standard deviation of 0.5
+        return np.array([self.manyetometre.veri]) + noise
     
     def set_cezeri(self):
         i = self.id-1
@@ -213,7 +270,26 @@ class Cezeri(CezeriParent):
         return modes,nav_data
           
     def cezeri_go(self):
-        #print(self.hedefler[0].bolge.enlem,self.hedefler[0].bolge.boylam,self.id, self.annoying_bug)
+
+         # Obtain a noisy GNSS measurement
+        measurement_gnss = self.get_noisy_measurement_gnss()
+        # Obtain a noisy magnetometer measurement
+        measurement_magnetometer = self.get_noisy_measurement_magnetometer()
+
+        # Predict the next state
+        self.kalman_filter_gnss.predict()
+        self.kalman_filter_magnetometer.predict()
+
+        # Update the state with the noisy measurements
+        self.kalman_filter_gnss.update(measurement_gnss)
+        self.kalman_filter_magnetometer.update(measurement_magnetometer)
+
+        # Use the filtered state for navigation
+        filtered_state_gnss = self.kalman_filter_gnss.state_estimate
+        filtered_state_magnetometer = self.kalman_filter_magnetometer.state_estimate
+
+        self.gnss.enlem, self.gnss.boylam, self.gnss.irtifa = filtered_state_gnss[0], filtered_state_gnss[1], filtered_state_gnss[2]
+        self.manyetometre.veri = filtered_state_magnetometer[0]
         if (self.set_trigger == 1):
             self.set_cezeri()
             self.set_trigger = 0
@@ -315,8 +391,8 @@ class Cezeri(CezeriParent):
         self.annoying_bug = 'gone'
     
     def run(self):
-        #print(self.manyetometre)
-        #print(self.gnss.enlem, self.gnss.boylam,self.gnss.irtifa)
+        print(self.manyetometre)
+        print(self.gnss.enlem, self.gnss.boylam,self.gnss.irtifa)
         #print(self.start_point.enlem,self.start_point.boylam)
         #print(self.hedefler[0])
         #print(self.hedefler[0].bolge.enlem,self.hedefler[0].bolge.boylam,self.id)
@@ -331,16 +407,12 @@ class Cezeri(CezeriParent):
         #print(self.nav_data)
 
 cezeri_1 = Cezeri(id = 1)
-cezeri_2 = Cezeri(id = 2)
 
 while robot.is_ok():
     (cezeri_1.run())
     robot.is_ok()
-    (cezeri_2.run())
-    
         
     
     
     
    
-
